@@ -1,0 +1,24 @@
+{
+  "name": "invoice_extract",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["seller_name", "netto", "vat", "currency", "confidence", "evidence"],
+    "properties": {
+      "seller_name": { "type": ["string", "null"] },
+      "netto": { "type": ["number", "null"] },
+      "vat": { "type": ["number", "null"] },
+      "currency": { "type": ["string", "null"], "enum": ["PLN", "EUR", "USD", null] },
+      "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+      "evidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["seller_line", "totals_line"],
+        "properties": {
+          "seller_line": { "type": ["string", "null"] },
+          "totals_line": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}
