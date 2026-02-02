@@ -2,6 +2,10 @@ import os
 import pandas as pd
 from datetime import datetime
 import re
+import json
+from openai import OpenAI
+
+USE_AI = True  # <- jednym ruchem możesz wyłączyć AI
 
 # ===================== KONFIGURACJA =====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +31,40 @@ def normalize_number(text):
         return float(nums[0])
     return ""
 
+def normalize_date(date_str: str) -> str:
+    """
+    Zamienia datę na format dd.mm.rrrr
+    Obsługuje:
+    - yyyy-mm-dd
+    - dd.mm.yyyy
+    - dd/mm/yyyy
+    """
+    if not date_str:
+        return ""
+
+    date_str = date_str.strip()
+
+    # yyyy-mm-dd -> dd.mm.yyyy
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", date_str)
+    if m:
+        yyyy, mm, dd = m.groups()
+        return f"{dd}.{mm}.{yyyy}"
+
+    # dd.mm.yyyy
+    m = re.match(r"(\d{2})\.(\d{2})\.(\d{4})", date_str)
+    if m:
+        dd, mm, yyyy = m.groups()
+        return f"{dd}.{mm}.{yyyy}"
+
+    # dd/mm/yyyy
+    m = re.match(r"(\d{2})/(\d{2})/(\d{4})", date_str)
+    if m:
+        dd, mm, yyyy = m.groups()
+        return f"{dd}.{mm}.{yyyy}"
+
+    # jak nie rozpoznaliśmy → zwracamy jak jest
+    return date_str
+
 
 def extract_amount(text, keywords):
     for line in text.splitlines():
@@ -43,6 +81,66 @@ def extract_brutto(text):
     values = [float(n.replace(" ", "").replace(".", "").replace(",", ".", 1)) for n in numbers]
     return max(values) if values else ""
 
+def load_invoice_schema():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    schema_path = os.path.join(base_dir, "invoice_schema.json")
+
+    with open(schema_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def extract_relevant_lines(text: str) -> str:
+    keywords = [
+        "razem", "total", "suma", "netto", "vat", "mwst", "tax",
+        "sprzedawca", "seller", "firma", "company", "lieferant",
+        "brutto", "gross", "do zapłaty", "amount due", "razem do zapłaty"
+    ]
+
+    lines = []
+    for line in text.splitlines():
+        low = line.lower()
+        if any(k in low for k in keywords):
+            lines.append(line.strip())
+
+    # limit bezpieczeństwa (koszt!)
+    return "\n".join(lines[:30])
+
+def ai_extract_fields(text_for_ai: str) -> dict:
+    """
+    Wywołuje AI i każe mu zwrócić WYŁĄCZNIE JSON zgodny ze schematem invoice_schema.json.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Brak zmiennej środowiskowej OPENAI_API_KEY")
+
+    client = OpenAI(api_key=api_key)
+    schema_pack = load_invoice_schema()  # {"name": "...", "schema": {...}}
+
+    instructions = (
+        "Wyciągnij z treści faktury: seller_name, netto, vat, currency. "
+        "Zwróć WYŁĄCZNIE JSON zgodny ze schematem. "
+        "Jeśli nie masz pewności, ustaw null i daj confidence=low. "
+        "W evidence.seller_line wklej linię, z której wziąłeś sprzedawcę. "
+        "W evidence.totals_line wklej linię/fragment z sumami netto/VAT."
+    )
+
+    # safety: nie wysyłamy za dużo tekstu nawet jeśli ktoś poda śmietnik
+    trimmed = text_for_ai[:8000]
+
+    resp = client.responses.create(
+        model="gpt-4.1-mini",
+        instructions=instructions,
+        input=trimmed,
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": schema_pack["name"],
+                "schema": schema_pack["schema"],
+                "strict": True
+            }
+        },
+    )
+
+    return json.loads(resp.output_text)
 
 def extract_amount_martex(text):
     netto = ""
@@ -77,6 +175,14 @@ def extract_invoice_date(text, seller=""):
 
     return ""
 
+def is_poczta_polska_invoice(faktura: str) -> bool:
+    return bool(re.match(r"^F\d{5}G\d{12}P$", faktura))
+
+def extract_invoice_date_poczta(text: str) -> str:
+    match = re.search(r"Data wystawienia:\s*(\d{4}-\d{2}-\d{2})", text)
+    if match:
+        return match.group(1)
+    return ""
 
 
 def extract_seller(text, faktura):
@@ -130,6 +236,13 @@ def extract_amount_razem(text: str):
 
     return "", ""
 
+def looks_like_worth_calling_ai(text: str) -> bool:
+    # musi być liczba z groszami
+    has_amount = bool(re.search(r"\d+[.,]\d{2}", text))
+    # i jakieś słowo-klucz sumy
+    has_keyword = any(k in text.lower() for k in ["razem", "total", "suma", "vat", "netto", "mwst", "tax"])
+    return has_amount and has_keyword
+
 
 def generate_xlsx(folder, output_dir):
     # folder może być bazą (...\Faktury) albo ...\Faktury\scans
@@ -163,6 +276,14 @@ def generate_xlsx(folder, output_dir):
 
         seller_name = extract_seller(full_text, faktura)
 
+        # === REGUŁA: POCZTA POLSKA ===
+        if is_poczta_polska_invoice(faktura):
+            seller_name = "POCZTA POLSKA"
+            invoice_date = extract_invoice_date_poczta(full_text)
+        else:
+            seller_name = extract_seller(full_text, faktura)
+            invoice_date = extract_invoice_date(full_text, seller_name)
+
         if seller_name == "MARTEX SP. Z O.O.":
             netto, vat = extract_amount_martex(full_text)
         else:
@@ -175,9 +296,30 @@ def generate_xlsx(folder, output_dir):
             if vat == "":
                 vat = extract_amount(full_text, VAT_KEYS)
 
+        # ================= AI FALLBACK (TANI TRYB) =================
+        if USE_AI and (seller_name == "" or netto == "" or vat == ""):
+            relevant_text = extract_relevant_lines(full_text)
+
+            ai = None
+            if relevant_text and looks_like_worth_calling_ai(relevant_text):
+                try:
+                    ai = ai_extract_fields(relevant_text)
+                except Exception:
+                    ai = None
+
+            if ai:
+                if seller_name == "" and ai.get("seller_name"):
+                    seller_name = ai["seller_name"].strip().upper()
+
+                if netto == "" and ai.get("netto") is not None:
+                    netto = ai["netto"]
+
+                if vat == "" and ai.get("vat") is not None:
+                    vat = ai["vat"]
+
         rows.append({
             "Nr faktury": faktura,
-            "Data wystawienia": extract_invoice_date(full_text, seller_name),
+            "Data wystawienia": normalize_date(invoice_date),
             "Nr rejestracyjny": rejestracja,
             "Sprzedawca": seller_name,
             "Netto": netto,
