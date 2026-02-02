@@ -200,13 +200,6 @@ class FakturyApp(QWidget):
             QMessageBox.critical(self, "Brak tessdata", f"Nie znaleziono folderu tessdata:\n{self.tessdata_dir}")
             return
 
-        # UI start
-        #self.btn_choose.setEnabled(False)
-        #self.btn_generate.setEnabled(False)
-        #self.progress.setVisible(True)         # pasek stanu widzialny True / False
-        #self.progress.setValue(0)
-        #self.label.setText("Start OCR...")
-
         # reset buffers
         self._ocr_stats = None
         self._ocr_error = None
