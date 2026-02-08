@@ -14,7 +14,7 @@ class OCRWorker(QObject):
     finished = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, folder_path, ocr_out, poppler_bin, tesseract_exe, tessdata_dir, dpi=200, first_page_only=True):
+    def __init__(self, folder_path, ocr_out, poppler_bin, tesseract_exe, tessdata_dir, dpi=300, first_page_only=True):
         super().__init__()
         self.folder_path = folder_path
         self.ocr_out = ocr_out
@@ -46,6 +46,41 @@ class OCRWorker(QObject):
                 on_progress=cb,
             )
             self.finished.emit(stats)
+        except Exception as e:
+            self.failed.emit(repr(e))
+
+class XlsxWorker(QObject):
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, script_path, folder_path, output_dir):
+        super().__init__()
+        self.script_path = script_path
+        self.folder_path = folder_path
+        self.output_dir = output_dir
+
+    def run(self):
+        try:
+            result = subprocess.run(
+                [sys.executable, self.script_path, "--folder", self.folder_path, "--output", self.output_dir],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+
+            out = (result.stdout or "") + "\n" + (result.stderr or "")
+
+            # generate_excel.py printuje: "Gotowe. Plik zapisany: <path>"
+            output_path = ""
+            for line in out.splitlines():
+                if "Gotowe. Plik zapisany:" in line:
+                    output_path = line.split("Gotowe. Plik zapisany:", 1)[1].strip()
+                    break
+
+            self.finished.emit(output_path)
+
+        except subprocess.CalledProcessError as e:
+            self.failed.emit(f"generate_excel.py zakończył się błędem.\n\n{repr(e)}")
         except Exception as e:
             self.failed.emit(repr(e))
 
@@ -117,9 +152,14 @@ class FakturyApp(QWidget):
         # thread refs
         self.thread = None
         self.worker = None
+        self.xlsx_thread = None
+        self.xlsx_worker = None
         self._ocr_stats = None
         self._ocr_error = None
         self._after_ocr = None
+        self._xlsx_error = None
+        self._xlsx_done = False
+
 
     def choose_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Wybierz folder z PDF-ami")
@@ -165,6 +205,12 @@ class FakturyApp(QWidget):
         # output TXT
         ocr_out = os.path.join(self.folder_path, "ocr_txt")
         os.makedirs(ocr_out, exist_ok=True)
+
+        # DEBUG - gdzie zapisują się pliki OCR?
+        #print("OCR DEBUG | created ocr_out, listing:", os.listdir(ocr_out), flush=True)
+        #print("OCR DEBUG | folder_path:", self.folder_path, flush=True)
+        print("OCR DEBUG | ocr_out:", ocr_out, flush=True)
+        #print("OCR DEBUG | exists:", os.path.isdir(ocr_out), flush=True)
 
         # poppler exe
         pdftoppm = os.path.join(self.poppler_bin, "pdftoppm.exe")
@@ -214,7 +260,7 @@ class FakturyApp(QWidget):
             poppler_bin=self.poppler_bin,
             tesseract_exe=self.tesseract_exe,
             tessdata_dir=self.tessdata_dir,
-            dpi=200,
+            dpi=300,
             first_page_only=True
         )
         self.worker.moveToThread(self.thread)
@@ -283,19 +329,101 @@ class FakturyApp(QWidget):
             QMessageBox.warning(self, "Błąd", "Nie wybrano folderu")
             return
 
-        # NIE wymagamy OCR. Jeśli txt są – generujemy, jeśli nie – skrypt sam krzyknie.
-        try:
-            script = os.path.join(self.app_dir, "generate_excel.py")
-            subprocess.run(
-                [sys.executable, script, "--folder", self.folder_path, "--output", self.output_dir],
-                check=True
-            )
+        if not self.output_dir:
+            QMessageBox.warning(self, "Błąd", "Nie wybrano folderu wyników (.xlsx)")
+            return
 
-            QMessageBox.information(self, "Gotowe", f"Wygenerowano plik .xlsx w:\n{self.output_dir}")
-        except subprocess.CalledProcessError as e:
-            QMessageBox.critical(self, "Błąd generowania xlsx", f"generate_excel.py zakończył się błędem.\n\n{repr(e)}")
-        except Exception as e:
-            QMessageBox.critical(self, "Błąd", repr(e))
+        if self.xlsx_thread and self.xlsx_thread.isRunning():
+            QMessageBox.information(self, "Generowanie w toku", "Generowanie pliku .xlsx już trwa.")
+            return
+
+        self.btn_choose.setEnabled(False)
+        self.btn_ocr.setEnabled(False)
+        self.btn_xlsx.setEnabled(False)
+        self.btn_main.setEnabled(False)
+
+        self.label.setText("Generowanie pliku .xlsx...\nProszę czekać.")
+        self.progress.setVisible(True)
+        self.progress.setRange(0, 0)
+
+        self._xlsx_error = None
+        self._xlsx_done = False
+        self._xlsx_output_path = ""
+
+        script = os.path.join(self.app_dir, "generate_excel.py")
+        self.xlsx_thread = QThread()
+        self.xlsx_worker = XlsxWorker(script, self.folder_path, self.output_dir)
+        self.xlsx_worker.moveToThread(self.xlsx_thread)
+
+        self.xlsx_thread.started.connect(self.xlsx_worker.run)
+        self.xlsx_worker.finished.connect(self.on_xlsx_finished, Qt.QueuedConnection)
+        self.xlsx_worker.failed.connect(self.on_xlsx_failed, Qt.QueuedConnection)
+        self.xlsx_thread.finished.connect(self.on_xlsx_thread_finished, Qt.QueuedConnection)
+
+        self.xlsx_worker.finished.connect(self.xlsx_worker.deleteLater)
+        self.xlsx_worker.failed.connect(self.xlsx_worker.deleteLater)
+        self.xlsx_thread.finished.connect(self.xlsx_thread.deleteLater)
+
+        self.xlsx_thread.start()
+
+    def on_xlsx_finished(self, output_path: str):
+        self._xlsx_done = True
+        self._xlsx_output_path = ""
+        self._xlsx_output_path = output_path or ""
+        if self.xlsx_thread:
+            self.xlsx_thread.quit()
+
+    def on_xlsx_failed(self, msg):
+        self._xlsx_error = msg
+        if self.xlsx_thread:
+            self.xlsx_thread.quit()
+
+    def on_xlsx_thread_finished(self):
+        self.btn_choose.setEnabled(True)
+        self.btn_ocr.setEnabled(True)
+        self.btn_xlsx.setEnabled(True)
+        self.btn_main.setEnabled(True)
+
+        self.progress.setVisible(False)
+        self.progress.setRange(0, 100)
+
+        if self._xlsx_error:
+            QMessageBox.critical(self, "Błąd generowania xlsx", self._xlsx_error)
+            return
+
+        if self._xlsx_done:
+            path = self._xlsx_output_path.strip()
+
+            if path:
+                QMessageBox.information(self, "Gotowe", f"Plik zapisany:\n{path}")
+                folder = os.path.dirname(path)
+            else:
+                QMessageBox.information(
+                    self,
+                    "Gotowe",
+                    f"Wygenerowano plik .xlsx w:\n{self.output_dir}"
+                )
+                folder = self.output_dir
+
+            # >>> OTWÓRZ FOLDER W EXPLORERZE <<<
+            try:
+                subprocess.Popen(f'explorer /select,"{path}"')
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Uwaga",
+                    f"Nie udało się otworzyć folderu:\n{folder}\n\n{repr(e)}"
+                )
+
+            # 2) Przywróć tekst na labelu
+            if self.folder_path and self.output_dir:
+                self.label.setText(
+                    f"Wybrany folder:\n{self.folder_path}\n\nFolder wyników:\n{self.output_dir}"
+                )
+            elif self.folder_path:
+                self.label.setText(f"Wybrany folder:\n{self.folder_path}")
+            else:
+                self.label.setText("Nie wybrano folderu")
 
     def run_ocr_and_xlsx(self):
         # Najpierw OCR, potem xlsx
