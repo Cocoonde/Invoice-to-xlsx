@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime
 import re
 import json
-from openai import OpenAI
+#from openai import OpenAI
 
 USE_AI = False  # <- jednym ruchem możesz wyłączyć AI
 
@@ -12,6 +12,40 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 NET_KEYS = ["net", "netto", "subtotal", "základ", "base"]
 VAT_KEYS = ["vat", "mwst", "tax", "moms", "dph", "áfa"]
+
+# ===================== REGUŁY SPRZEDAWCÓW (KEYWORD -> SELLER) =====================
+SELLER_KEYWORD_MAP = {
+    "ŁOSOŚ": "LETLIV FABIAN ŁOSOŚ",
+    "SCANIA POLSKA": "SCANIA",
+    "RONAL": "RONAL",
+    "INTER CARS": "INTER CARS",
+    "PACCAR FINANCIAL": "PACCAR FINANCIAL",
+    "KRISCAR KRZYSZTOF BALIŃSKI": "KRISCAR KRZYSZTOF BALIŃSKI",
+    "OPOLTRANS": "OPOLTRANS",
+    "MEGATECHNIK": "MEGATECHNIK",
+    "HT TRUCKS": "HT TRUCKS & PARTS",
+    "TORUS": "TORUS S.C.",
+    "KON-TIR": "KON-TIR S.C.",
+    "KRZYSZTOF PIOTROWICZ": "K.P. AUTO PORT",
+    "KAMIL MARKIEWICZ": "WULKANIZACJA KAMIL MARKIEWICZ",
+    "SCANIA FINANCE": "SCANIA FINANCE",
+    "ROBERT KOPECKI": "ROBERT KOPECKI",
+    "KOMPANN": "KOMPANN SP. Z O.O.",
+}
+
+def apply_seller_keyword_map(text: str) -> str:
+    """
+    Jeśli w OCR-owym tekście znajdziemy keyword -> zwracamy nazwę sprzedawcy.
+    Zwraca "" jeśli nie dopasowano.
+    """
+    if not text:
+        return ""
+    t = text.upper()
+    for kw, seller in SELLER_KEYWORD_MAP.items():
+        if kw in t:
+            return seller  # już jest uppercase
+    return ""
+
 
 # ===================== FUNKCJE =====================
 
@@ -392,6 +426,12 @@ def extract_seller(text, faktura):
     if re.match(r"^[A-Za-z][A-Za-z0-9]?/[A-Za-z]{2,3}/202\d/\d{5}$", faktura):
         return "MARTEX SP. Z O.O."
 
+    # ======= REGUŁY KEYWORD (Twoje mapowanie sprzedawców) =======
+    mapped = apply_seller_keyword_map(text)
+    if mapped:
+        return mapped
+
+
     lines = [l.strip() for l in text.splitlines() if l.strip()]
 
     # słowa kluczowe
@@ -662,6 +702,7 @@ def generate_xlsx(folder, output_dir):
     df = df[[
         "Nr faktury",
         "Data wystawienia",
+        "Sprzedawca",
         "Netto",
         "VAT",
         "Waluta",
