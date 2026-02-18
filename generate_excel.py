@@ -16,7 +16,7 @@ VAT_KEYS = ["vat", "mwst", "tax", "moms", "dph", "áfa"]
 # ===================== REGUŁY SPRZEDAWCÓW (KEYWORD -> SELLER) =====================
 SELLER_KEYWORD_MAP = {
     "ŁOSOŚ": "LETLIV FABIAN ŁOSOŚ",
-    "SCANIA POLSKA": "SCANIA",
+    "SCANIA POLSKA": "SCANIA POLSKA",
     "RONAL": "RONAL",
     "INTER CARS": "INTER CARS",
     "PACCAR FINANCIAL": "PACCAR FINANCIAL",
@@ -31,6 +31,14 @@ SELLER_KEYWORD_MAP = {
     "SCANIA FINANCE": "SCANIA FINANCE",
     "ROBERT KOPECKI": "ROBERT KOPECKI",
     "KOMPANN": "KOMPANN SP. Z O.O.",
+    "ERGO HESTIA": "ERGO HESTIA",
+    "HEPI FUTURE": "HEPI FUTURE",
+    "ANWIM": "ANWIM",
+    "KARTONY24": "KARTONY24",
+    "KRZYSZTOF RASZKA": "CIESZYŃSKI AUTO SERWIS PHU GRAND",
+    "V.P. RENT": "V.P. RENT HUNGARY",
+    "POCZTA": "POCZTA POLSKA",
+    "PORT RADOMSKO": "PORT RADOMSKO",
 }
 
 def apply_seller_keyword_map(text: str) -> str:
@@ -438,7 +446,7 @@ def extract_seller(text, faktura):
     seller_headers = ["sprzedawca", "seller", "lieferant"]
     buyer_headers  = ["nabywca", "kupujący", "kupujacy", "buyer", "odbiorca", "recipient", "customer"]
 
-    # rzeczy, które często pojawiają się w pobliżu i psują wybór (Twoje: x-trade transport)
+    # rzeczy, które często pojawiają się w pobliżu i psują wybór
     banned_contains = [
         "x-trade transport",  # <- to chciałaś ignorować
         "x trade transport",
@@ -449,7 +457,7 @@ def extract_seller(text, faktura):
     # linie, które są "śmieciem" zamiast nazwy firmy
     banned_exact = {
         "sprzedawca", "seller", "lieferant",
-        "nabywca", "kupujący", "kupujacy", "buyer",
+        "nabywca", "kupujący", "kupujacy", "buyer", "ODPOWIEDZIALNOŚCIĄ",
     }
 
     def is_good_company_line(s: str) -> bool:
