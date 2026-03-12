@@ -39,6 +39,17 @@ SELLER_KEYWORD_MAP = {
     "V.P. RENT": "V.P. RENT HUNGARY",
     "POCZTA": "POCZTA POLSKA",
     "PORT RADOMSKO": "PORT RADOMSKO",
+    "MARTEX": "MARTEX",
+    "OLX": "OLX",
+    "ROBERT WIŚNIEWSKI": "AUTO MECHANIKA ROBERT WIŚNIEWSKI",
+    "GIZ-TRANS": "GIZ-TRANS ROBERT GIZA",
+    "CENTRO-GUM": "CENTRO-GUM",
+    "AUTO PORT": "K. P. AUTO PORT",
+    "JADWIGA JÓŹWA": "JADWIGA JÓŹWA",
+    "PHU DAN": "PHU DAN JERZY DANKO",
+    "JERZY DANKO": "PHU DAN JERZY DANKO",
+    "WARTA": "WARTA",
+    "INTERTRANS": "INTERTRANS PKS",
 }
 
 def apply_seller_keyword_map(text: str) -> str:
@@ -458,6 +469,7 @@ def extract_seller(text, faktura):
     banned_exact = {
         "sprzedawca", "seller", "lieferant",
         "nabywca", "kupujący", "kupujacy", "buyer", "ODPOWIEDZIALNOŚCIĄ",
+        "ODPOWIEDZIALNOSCIA",
     }
 
     def is_good_company_line(s: str) -> bool:
